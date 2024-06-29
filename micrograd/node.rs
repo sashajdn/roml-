@@ -91,7 +91,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_node() {
+    fn test_node_sanity_check() {
         let input_node = Node::Input("1", 3.0);
         let weight_node = Node::Weight("2", 7.0);
         let bias_node = Node::Bias("3", 1.0);
