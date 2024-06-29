@@ -1,0 +1,10 @@
+[package]
+name = "roml"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+
+[lib]
+name = "micrograd"
+path = "micrograd/lib.rs"
