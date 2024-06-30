@@ -1,88 +1,146 @@
-use std::cmp::Ordering;
+use std::cell::RefCell;
 use std::ops::Add;
-use std::ops::Div;
 use std::ops::Mul;
-use std::ops::Sub;
+use std::rc::Rc;
 
-type Id = &'static str;
-
-#[derive(Debug, Clone)]
-enum Operation {
+#[derive(Debug, Clone, Copy)]
+enum Operand {
     Add,
     Sub,
     Mul,
-    Div,
+    Leaf,
 }
 
-#[derive(Debug, Clone)]
+trait Value {
+    fn value(&self) -> f64;
+}
+
+struct GraphNode {
+    raw: f64,
+    grad: RefCell<f64>,
+    operand: Operand,
+    left: Option<Rc<GraphNode>>,
+    right: Option<Rc<GraphNode>>,
+}
+
+impl From<f64> for GraphNode {
+    fn from(value: f64) -> Self {
+        Self {
+            raw: value,
+            operand: Operand::Leaf,
+            left: None,
+            right: None,
+            grad: RefCell::new(0.0),
+        }
+    }
+}
+
+impl GraphNode {
+    fn new(
+        value: f64,
+        operand: Operand,
+        left: Option<Rc<GraphNode>>,
+        right: Option<Rc<GraphNode>>,
+    ) -> Self {
+        Self {
+            raw: value,
+            operand,
+            left,
+            right,
+            grad: RefCell::new(0.0),
+        }
+    }
+
+    fn backprop(&self) {
+        match self.operand {
+            Operand::Add | Operand::Sub => {
+                let own_grad = self.grad.borrow_mut();
+
+                if let Some(left) = &self.left {
+                    let mut left_grad = left.grad.borrow_mut();
+                    *left_grad += *own_grad;
+                }
+
+                if let Some(right) = &self.right {
+                    let mut right_grad = right.grad.borrow_mut();
+                    *right_grad += *own_grad;
+                }
+            }
+            Operand::Mul => {
+                let own_grad = self.grad.borrow_mut();
+
+                if let (Some(left), Some(right)) = (&self.left, &self.right) {
+                    let mut left_grad = left.grad.borrow_mut();
+                    let mut right_grad = right.grad.borrow_mut();
+                    // Chain rule: differentiate over l * r -> dl/dl * dr/dl + dl/dr * dr/dr
+                    // dl/dl * dr/dl -> 1 * dr/dl
+                    let dleft = (*right_grad).mul(*own_grad);
+                    *left_grad += dleft;
+
+                    // dl/dr * dr/dr -> 1 * dl/dr
+                    let dright = (*left_grad).mul(*own_grad);
+                    *right_grad += dright;
+                }
+            }
+            _ => {}
+        };
+    }
+}
+
+impl PartialEq for GraphNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.raw == other.raw
+    }
+}
+
+#[derive(PartialEq)]
 enum Node {
-    Weight(Id, f64),
-    Bias(Id, f64),
-    Input(Id, f64),
-    Intermediate(Operation, f64),
+    Intermediate(Rc<GraphNode>),
+    Input(Rc<GraphNode>),
+    Weight(Rc<GraphNode>),
+    Bias(Rc<GraphNode>),
 }
 
 impl Node {
-    pub fn value(&self) -> f64 {
+    fn inner(&self) -> Rc<GraphNode> {
         match self {
-            Node::Weight(_, v)
-            | Node::Bias(_, v)
-            | Node::Input(_, v)
-            | Node::Intermediate(_, v) => *v,
+            Node::Intermediate(g) => Rc::clone(g),
+            Node::Input(g) | Node::Weight(g) | Node::Bias(g) => Rc::clone(g),
         }
     }
 }
 
-impl PartialEq for Node {
-    fn eq(&self, other: &Self) -> bool {
-        self.value() == other.value()
-    }
-}
-
-impl Eq for Node {}
-
-impl PartialOrd for Node {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        use Node::*;
-        match (self, other) {
-            (Input(_, a), Input(_, b))
-            | (Weight(_, a), Weight(_, b))
-            | (Bias(_, a), Bias(_, b))
-            | (Intermediate(_, a), Intermediate(_, b)) => a.partial_cmp(b),
-            _ => None,
-        }
+impl Value for Node {
+    fn value(&self) -> f64 {
+        self.inner().raw
     }
 }
 
 impl Add for Node {
     type Output = Node;
 
-    fn add(self, other: Node) -> Node {
-        Node::Intermediate(Operation::Add, self.value() + other.value())
-    }
-}
-
-impl Sub for Node {
-    type Output = Node;
-
-    fn sub(self, other: Node) -> Node {
-        Node::Intermediate(Operation::Sub, self.value() - other.value())
-    }
-}
-
-impl Div for Node {
-    type Output = Node;
-
-    fn div(self, other: Node) -> Node {
-        Node::Intermediate(Operation::Div, self.value().div(other.value()))
+    fn add(self, other: Self) -> Self::Output {
+        Node::Intermediate(Rc::new(GraphNode {
+            raw: self.value() + other.value(),
+            operand: Operand::Add,
+            left: Some(self.inner()),
+            right: Some(other.inner()),
+            grad: RefCell::new(0.0),
+        }))
     }
 }
 
 impl Mul for Node {
     type Output = Node;
 
-    fn mul(self, other: Node) -> Node {
-        Node::Intermediate(Operation::Mul, self.value() * other.value())
+    fn mul(self, other: Self) -> Self::Output {
+        Node::Intermediate(Rc::new(GraphNode {
+            raw: self.value() * other.value(),
+            operand: Operand::Mul,
+            left: Some(self.inner()),
+            right: Some(other.inner()),
+            grad: RefCell::new(0.0),
+        }))
     }
 }
 
@@ -91,12 +149,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_node_sanity_check() {
-        let input_node = Node::Input("1", 3.0);
-        let weight_node = Node::Weight("2", 7.0);
-        let bias_node = Node::Bias("3", 1.0);
+    fn node_sanity_check() {
+        let x_gn: f64 = 10.0;
+        let x_gn: GraphNode = x_gn.into();
+        let x = Node::Input(x_gn.into());
 
-        let result = (input_node * weight_node) + bias_node;
-        assert_eq!(result, Node::Intermediate(Operation::Add, 22.0));
+        let w_gn: f64 = 3.0;
+        let w_gn: GraphNode = w_gn.into();
+        let w = Node::Weight(w_gn.into());
+
+        let b_gn: f64 = 7.0;
+        let b_gn: GraphNode = b_gn.into();
+        let b = Node::Bias(b_gn.into());
+
+        let g = (x * w) + b;
+        assert_eq!(37.0, g.value());
     }
 }
