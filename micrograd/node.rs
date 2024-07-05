@@ -4,18 +4,15 @@ use std::ops::Mul;
 use std::rc::Rc;
 
 #[derive(Debug, Clone, Copy)]
-enum Operand {
+pub enum Operand {
     Add,
     Sub,
     Mul,
     Leaf,
 }
 
-trait Value {
-    fn value(&self) -> f64;
-}
-
-struct GraphNode {
+#[derive(Debug)]
+pub struct GraphNode {
     raw: f64,
     grad: RefCell<f64>,
     operand: Operand,
@@ -36,7 +33,7 @@ impl From<f64> for GraphNode {
 }
 
 impl GraphNode {
-    fn new(
+    pub fn new(
         value: f64,
         operand: Operand,
         left: Option<Rc<GraphNode>>,
@@ -93,12 +90,16 @@ impl PartialEq for GraphNode {
     }
 }
 
-#[derive(PartialEq)]
-enum Node {
+#[derive(Debug, PartialEq)]
+pub enum Node {
     Intermediate(Rc<GraphNode>),
     Input(Rc<GraphNode>),
     Weight(Rc<GraphNode>),
     Bias(Rc<GraphNode>),
+}
+
+pub trait Value {
+    fn value(&self) -> f64;
 }
 
 impl Node {
