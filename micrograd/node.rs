@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::ops::Add;
 use std::ops::Mul;
@@ -44,11 +45,11 @@ impl GraphNode {
             operand,
             left,
             right,
-            grad: RefCell::new(0.0),
+            grad: RefCell::new(1.0),
         }
     }
 
-    fn backprop(&self) {
+    pub fn backprop(&self) {
         match self.operand {
             Operand::Add | Operand::Sub => {
                 let own_grad = self.grad.borrow_mut();
@@ -67,15 +68,16 @@ impl GraphNode {
                 let own_grad = self.grad.borrow_mut();
 
                 if let (Some(left), Some(right)) = (&self.left, &self.right) {
+                    // TODO: we should be able to multiple by a scalar
                     let mut left_grad = left.grad.borrow_mut();
                     let mut right_grad = right.grad.borrow_mut();
                     // Chain rule: differentiate over l * r -> dl/dl * dr/dl + dl/dr * dr/dr
                     // dl/dl * dr/dl -> 1 * dr/dl
-                    let dleft = (*right_grad).mul(*own_grad);
+                    let dleft = (**right).raw.mul(*own_grad);
                     *left_grad += dleft;
 
                     // dl/dr * dr/dr -> 1 * dl/dr
-                    let dright = (*left_grad).mul(*own_grad);
+                    let dright = (**left).raw.mul(*own_grad);
                     *right_grad += dright;
                 }
             }
@@ -100,10 +102,12 @@ pub enum Node {
 
 pub trait Value {
     fn value(&self) -> f64;
+
+    fn grad(&self) -> f64;
 }
 
 impl Node {
-    fn inner(&self) -> Rc<GraphNode> {
+    pub fn inner(&self) -> Rc<GraphNode> {
         match self {
             Node::Intermediate(g) => Rc::clone(g),
             Node::Input(g) | Node::Weight(g) | Node::Bias(g) => Rc::clone(g),
@@ -114,6 +118,10 @@ impl Node {
 impl Value for Node {
     fn value(&self) -> f64 {
         self.inner().raw
+    }
+
+    fn grad(&self) -> f64 {
+        *self.inner().grad.borrow()
     }
 }
 
